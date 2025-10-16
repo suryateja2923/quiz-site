@@ -1,46 +1,52 @@
-# main.py — 2nd Year Quiz (Apt 8 + Reason 7 + Coding 15 • 60s/Question • Strict Mode • Thank-You)
-# -----------------------------------------------------------------------------------------------
+# main.py — 2nd Year Quiz (Apt 8 + Reason 7 + Coding 15 • 60s/Question • Strict Mode)
+# -----------------------------------------------------------------------------------
 # Run:
 #   pip install flask pandas openpyxl
 #   python main.py
 #   open http://127.0.0.1:5000
 
 from __future__ import annotations
-import os, json, random
+import os, json, random, threading
 from datetime import datetime
 from typing import List, Dict, Any
-from flask import Flask, request, redirect, url_for, session, render_template_string, flash, send_file
+from functools import wraps
+
+from flask import (
+    Flask, request, redirect, url_for, session, render_template_string,
+    flash, send_file
+)
 import pandas as pd
 
 app = Flask(__name__, static_folder="static")
 app.secret_key = os.environ.get("QUIZ_SECRET", "dev-secret-change-me")
-ADMIN_KEY = os.environ.get("QUIZ_ADMIN_KEY", "letmein")
 
-# ---- your local images (2nd-year site) ----
+# ---- Admin creds ----
+ADMIN_USER = os.environ.get("QUIZ_ADMIN_USER", "surya")
+ADMIN_PASS = os.environ.get("QUIZ_ADMIN_PASS", "nriit123")
+
+# ---- local images (change if needed) ----
 HEADER_IMG_PATH = r"C:\college sit\2nd year\images\header.jpg"
 LOGO_IMG_PATH   = r"C:\college sit\2nd year\images\logo.jpg"
 
 @app.route("/header-img")
 def header_img():
-    return send_file(HEADER_IMG_PATH)
+    return send_file(HEADER_IMG_PATH) if os.path.exists(HEADER_IMG_PATH) else ("", 404)
 
 @app.route("/logo-img")
 def logo_img():
-    return send_file(LOGO_IMG_PATH)
+    return send_file(LOGO_IMG_PATH) if os.path.exists(LOGO_IMG_PATH) else ("", 404)
 
-# ---- Excel location ----
+# ---- Excel ----
 EXCEL_PATH = os.path.join(os.getcwd(), "quiz_data", "students.xlsx")
 os.makedirs(os.path.dirname(EXCEL_PATH), exist_ok=True)
 STUDENTS_SHEET = "students"
 ATTEMPTS_SHEET = "attempts"
+XL_LOCK = threading.Lock()
 
 # =============================================================================
-# 2ND-YEAR QUESTION BANKS (Aptitude, Reasoning, Basic Coding)
-# Each item: {"id", "section", "question", "options":[...], "answer_index": int}
+# QUESTION BANKS
 # =============================================================================
-
 APTITUDE: List[Dict[str, Any]] = [
-    # Easy 1–15
     {"id":"APT-001","section":"Aptitude","question":"25 percent of 200 is","options":["25","50","100","75"],"answer_index":1},
     {"id":"APT-002","section":"Aptitude","question":"Simplify 6 × 7 + 8","options":["50","56","42","60"],"answer_index":0},
     {"id":"APT-003","section":"Aptitude","question":"If 10 pencils cost 40 rupees, cost of one pencil is","options":["2","3","4","5"],"answer_index":2},
@@ -56,7 +62,6 @@ APTITUDE: List[Dict[str, Any]] = [
     {"id":"APT-013","section":"Aptitude","question":"If A = B and B = C then A =","options":["B","C","A","All equal"],"answer_index":3},
     {"id":"APT-014","section":"Aptitude","question":"Successor of 99 is","options":["98","99","100","101"],"answer_index":2},
     {"id":"APT-015","section":"Aptitude","question":"Square root of 81 is","options":["7","8","9","10"],"answer_index":2},
-    # Moderate 16–35
     {"id":"APT-016","section":"Aptitude","question":"A train travels 120 km in 3 hours. Speed is","options":["30","40","50","60"],"answer_index":1},
     {"id":"APT-017","section":"Aptitude","question":"Compound interest on 1000 at 10 percent for 2 years is","options":["200","210","220","230"],"answer_index":1},
     {"id":"APT-018","section":"Aptitude","question":"If 12 men complete work in 15 days, 6 men will take","options":["25","30","35","40"],"answer_index":1},
@@ -77,7 +82,6 @@ APTITUDE: List[Dict[str, Any]] = [
     {"id":"APT-033","section":"Aptitude","question":"Series 2, 4, 8, 16, ?","options":["18","20","32","36"],"answer_index":2},
     {"id":"APT-034","section":"Aptitude","question":"(10 + 2)² – (10 – 2)² =","options":["32","64","96","128"],"answer_index":2},
     {"id":"APT-035","section":"Aptitude","question":"Selling price 540, loss 10%. Cost price","options":["500","550","600","650"],"answer_index":2},
-    # Hard 36–50
     {"id":"APT-036","section":"Aptitude","question":"If x + 1/x = 2, then x² + 1/x² =","options":["2","3","4","5"],"answer_index":0},
     {"id":"APT-037","section":"Aptitude","question":"2x + 3y = 12, x – y = 1. Value of x","options":["2","3","4","5"],"answer_index":2},
     {"id":"APT-038","section":"Aptitude","question":"10000 at 10% compound interest for 2 years. Amount","options":["11000","12000","12100","12500"],"answer_index":2},
@@ -96,7 +100,6 @@ APTITUDE: List[Dict[str, Any]] = [
 ]
 
 REASONING: List[Dict[str, Any]] = [
-    # Easy 1–15
     {"id":"RSN-001","section":"Reasoning","question":"Next number in the series 2, 4, 6, 8, ?","options":["9","10","11","12"],"answer_index":1},
     {"id":"RSN-002","section":"Reasoning","question":"If TOM = GNL, then CAT =","options":["XZG","ZYG","XZG","XZH"],"answer_index":0},
     {"id":"RSN-003","section":"Reasoning","question":"Which word is odd one out?","options":["Apple","Mango","Carrot","Banana"],"answer_index":2},
@@ -117,7 +120,6 @@ REASONING: List[Dict[str, Any]] = [
         "Tree → Seed → Plant → Fruit"
     ],"answer_index":0},
     {"id":"RSN-015","section":"Reasoning","question":"If 2 = 6, 3 = 12, 4 = 20, then 5 =","options":["25","30","35","40"],"answer_index":1},
-    # Moderate 16–35
     {"id":"RSN-016","section":"Reasoning","question":"Pointing to a girl: 'She is the daughter of my grandfather’s only son.' She is","options":["Sister","Cousin","Mother","Aunt"],"answer_index":0},
     {"id":"RSN-017","section":"Reasoning","question":"In a certain code “DOG” = 4157, then “CAT” =","options":["31420","31620","31425","31525"],"answer_index":0},
     {"id":"RSN-018","section":"Reasoning","question":"Five friends P,Q,R,S,T in a line. R not next to S, S left of P. Who is in the middle?","options":["P","Q","R","S"],"answer_index":1},
@@ -138,7 +140,6 @@ REASONING: List[Dict[str, Any]] = [
     {"id":"RSN-033","section":"Reasoning","question":"Some cats are dogs; some dogs are rats. 'Some cats are rats.'","options":["True","False","Cannot be concluded","None"],"answer_index":2},
     {"id":"RSN-034","section":"Reasoning","question":"Rearrange TAECR to form a word","options":["REACT","TRACE","CARET","CREATE"],"answer_index":0},
     {"id":"RSN-035","section":"Reasoning","question":"If 5×6=30 and 6×7=42 then 8×9=","options":["64","70","72","80"],"answer_index":2},
-    # Hard 36–50
     {"id":"RSN-036","section":"Reasoning","question":"All flowers are leaves; some leaves are roots. Some flowers are roots?","options":["True","False","Cannot be concluded","None"],"answer_index":2},
     {"id":"RSN-037","section":"Reasoning","question":"Arrange logically: Doctor, Patient, Treatment, Disease, Diagnosis","options":[
         "Disease → Patient → Diagnosis → Doctor → Treatment",
@@ -162,7 +163,6 @@ REASONING: List[Dict[str, Any]] = [
 ]
 
 CODING: List[Dict[str, Any]] = [
-    # Easy 1–15
     {"id":"COD-001","section":"Coding","question":"In C, which symbol ends a statement?","options":[".",";",",",":"],"answer_index":1},
     {"id":"COD-002","section":"Coding","question":"In Python, which function prints output?","options":["output()","echo()","print()","display()"],"answer_index":2},
     {"id":"COD-003","section":"Coding","question":"In Java, which keyword defines a class?","options":["def","class","structure","define"],"answer_index":1},
@@ -178,7 +178,6 @@ CODING: List[Dict[str, Any]] = [
     {"id":"COD-013","section":"Coding","question":"In C, keyword to exit loop","options":["continue","return","break","stop"],"answer_index":2},
     {"id":"COD-014","section":"Coding","question":"In Java, “==” checks","options":["Assignment","Comparison","Reference","None"],"answer_index":1},
     {"id":"COD-015","section":"Coding","question":"In Python, list index starts from","options":["0","1","-1","2"],"answer_index":0},
-    # Moderate 16–35
     {"id":"COD-016","section":"Coding","question":"C: int a=5; printf(\"%d\", ++a);","options":["4","5","6","7"],"answer_index":2},
     {"id":"COD-017","section":"Coding","question":"Java: int x=5; System.out.println(x++); prints","options":["4","5","6","7"],"answer_index":1},
     {"id":"COD-018","section":"Coding","question":"Python: for i in range(3): print(i) outputs","options":["1 2 3","0 1 2","0 1 2 3","1 2"],"answer_index":1},
@@ -199,7 +198,6 @@ CODING: List[Dict[str, Any]] = [
     {"id":"COD-033","section":"Coding","question":"Python: bool(0) returns","options":["True","False","Error","None"],"answer_index":1},
     {"id":"COD-034","section":"Coding","question":"C: purpose of return 0 in main()","options":["End of loop","End of program","Successful execution","Error"],"answer_index":2},
     {"id":"COD-035","section":"Coding","question":"Java array index starts at","options":["0","1","-1","2"],"answer_index":0},
-    # Hard 36–50
     {"id":"COD-036","section":"Coding","question":"C: int a=5; printf(\"%d\", a++ + ++a);","options":["10","11","12","Undefined behavior"],"answer_index":3},
     {"id":"COD-037","section":"Coding","question":"OOP concept via method overriding","options":["Inheritance","Encapsulation","Polymorphism","Abstraction"],"answer_index":2},
     {"id":"COD-038","section":"Coding","question":"Python: x=[]; def f(): x.append(1); f(); print(x)","options":["[]","[1]","[1,1]","Error"],"answer_index":1},
@@ -217,11 +215,10 @@ CODING: List[Dict[str, Any]] = [
     {"id":"COD-050","section":"Coding","question":"Python: a=(1,2,3); a[0]=5","options":["[5,2,3]","(5,2,3)","Error","None"],"answer_index":2},
 ]
 
-# selection quotas for this site
 QUOTA = {"Aptitude": 8, "Reasoning": 7, "Coding": 15}
 
-# ---------------------- Templates (minimal UI + STRICT JS) ----------------------
-PHOTO_BG = "https://plus.unsplash.com/premium_photo-1661964187664-e26f70e1a224?fm=jpg&q=60&w=3000&ixlib=rb-4.1.0"
+# ---------------------- Templates ----------------------
+PHOTO_BG = "https://img.pikbest.com/origin/09/28/35/25KpIkbEsTf4R.jpg!w700wp"  # Background image URL or path
 
 BASE_HTML = """
 <!doctype html>
@@ -239,13 +236,62 @@ BASE_HTML = """
       .exam-title{font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:#eaf2ff;text-shadow:0 0 10px rgba(147,197,253,.75),0 0 22px rgba(37,99,235,.45)}
       input{background:rgba(3,7,18,.35);color:#fff;border:1px solid rgba(147,197,253,.45);backdrop-filter:blur(6px);min-height:44px}
       input:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(96,165,250,.35);outline:none}
-      .simple-quiz .qtext{color:#fff;font-weight:800;text-shadow:0 0 8px rgba(255,255,255,.45);margin:.35rem 0 1rem 0;font-size:clamp(1.1rem,1.2rem + .6vw,1.7rem)}
-      .simple-quiz .option-row{background:transparent;border:none;padding:.35rem 0;margin-bottom:.6rem;color:#f8fafc;display:flex;align-items:center;gap:.75rem;line-height:1.35}
-      .simple-quiz .ans-radio{appearance:none;width:26px;height:26px;border-radius:50%;border:2px solid rgba(209,213,219,.95);background:rgba(255,255,255,.95);display:inline-grid;place-items:center;position:relative;outline:none;box-shadow:0 1px 2px rgba(0,0,0,.25),0 0 0 4px rgba(255,255,255,.08) inset;transition:border-color .15s, box-shadow .15s, background .15s}
-      .simple-quiz .ans-radio::after{content:"";width:12px;height:12px;border-radius:50%;background:#2563eb;transform:scale(0);transition:transform .12s}
-      .simple-quiz .ans-radio:checked{border-color:#93c5fd;box-shadow:0 1px 2px rgba(0,0,0,.25),0 0 8px rgba(59,130,246,.55)}
-      .simple-quiz .ans-radio:checked::after{transform:scale(1)}
-      #timer{background:rgba(11,19,40,.40);border:1px solid rgba(147,197,253,.55);color:#eaf2ff;font-weight:bold;padding:.3em .7em;border-radius:.5rem;box-shadow:0 0 10px rgba(147,197,253,.45);text-shadow:0 0 8px rgba(255,255,255,.6)}
+
+      /* ====== MCQ option (like your screenshots) ====== */
+      .mcq-option{
+        position:relative;
+        display:flex; align-items:center; gap:.9rem;
+        border:1px solid rgba(203,213,225,.75); /* slate-300 */
+        background:rgba(2,6,23,.12);
+        color:#e5e7eb; /* text-slate-200 */
+        padding:.9rem 1rem; margin:.65rem 0;
+        border-radius:.8rem;
+        transition:background .15s, border-color .15s, box-shadow .15s, transform .04s;
+        cursor:pointer; user-select:none;
+      }
+      .mcq-option:hover{ background:rgba(2,6,23,.20); border-color:rgba(147,197,253,.65); }
+      .mcq-option:focus-within{ box-shadow:0 0 0 3px rgba(96,165,250,.35); border-color:#93c5fd; }
+
+      .mcq-option input{
+        position:absolute; inset:0; opacity:0; margin:0; cursor:pointer;
+      }
+
+      .mcq-badge{
+        min-width:34px; height:34px; border-radius:50%;
+        display:grid; place-items:center;
+        font-weight:700;
+        border:2px solid rgba(148,163,184,.9); /* slate-400 */
+        color:#e5e7eb; background:transparent;
+        transition:all .12s;
+      }
+      .mcq-text{ flex:1; line-height:1.35; }
+
+      /* selected state */
+      .mcq-option input:checked ~ .mcq-badge{
+        background:#2563eb; color:#fff; border-color:#93c5fd;
+        box-shadow:0 0 0 4px rgba(59,130,246,.35);
+      }
+      .mcq-option input:checked ~ .mcq-text{
+        color:#fff;
+      }
+      .mcq-option input:checked ~ .mcq-badge + .mcq-text,
+      .mcq-option input:checked ~ .mcq-text + .mcq-extra{
+        /* keep spacing consistent if extra spans get added later */
+      }
+      .mcq-option input:checked ~ .mcq-text,
+      .mcq-option:has(input:checked){
+        background:rgba(59,130,246,.18);
+        border-color:#93c5fd;
+      }
+      /* browsers without :has still get background via the rule above through sibling updates */
+
+      #timer{
+        background:rgba(11,19,40,.40);
+        border:1px solid rgba(147,197,253,.55);
+        color:#eaf2ff;font-weight:bold;padding:.3em .7em;border-radius:.5rem;
+        box-shadow:0 0 10px rgba(147,197,253,.45);text-shadow:0 0 8px rgba(255,255,255,.6)
+      }
+
       .floating-logo{position:fixed;right:20px;bottom:20px;width:76px;height:76px;border-radius:50%;display:grid;place-items:center;z-index:999;background:rgba(255,255,255,0.02);box-shadow:0 0 0 4px rgba(255,255,255,0.08) inset,0 0 24px rgba(59,130,246,0.45),0 0 48px rgba(59,130,246,0.35),0 0 84px rgba(59,130,246,0.25);backdrop-filter:blur(6px);animation:pulse 3.2s ease-in-out infinite}
       .floating-logo img{width:62px;height:62px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.75);box-shadow:0 0 10px rgba(255,255,255,.25)}
       @keyframes pulse{0%,100%{box-shadow:0 0 0 4px rgba(255,255,255,.08) inset,0 0 22px rgba(59,130,246,.45),0 0 48px rgba(59,130,246,.30),0 0 72px rgba(59,130,246,.20)}50%{box-shadow:0 0 0 4px rgba(255,255,255,.08) inset,0 0 30px rgba(59,130,246,.65),0 0 60px rgba(59,130,246,.42),0 0 96px rgba(59,130,246,.30)}}
@@ -276,26 +322,39 @@ BASE_HTML = """
 </html>
 """
 
-# ---------- Entry (only Roll + Name) ----------
+# Landing with two buttons
+LANDING_HTML = """
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <div class="d-grid gap-3">
+      <a class="btn btn-primary btn-lg" href="{{ url_for('admin_login') }}">Admin</a>
+      <a class="btn btn-outline-light btn-lg" href="{{ url_for('student_entry') }}">Student</a>
+    </div>
+  </div>
+</div>
+"""
+
+# Student form
 FORM_HTML = """
 <div class="row">
   <div class="col-lg-7">
     <form class="p-0" method="post" action="{{ url_for('start_quiz') }}">
       <div class="mb-3">
         <label class="form-label">Roll Number</label>
-        <input required type="text" name="roll" class="form-control" />
+        <input required type="text" name="roll" class="form-control" maxlength="40"/>
       </div>
       <div class="mb-3">
         <label class="form-label">Name</label>
-        <input required type="text" name="name" class="form-control" />
+        <input required type="text" name="name" class="form-control" maxlength="60"/>
       </div>
       <button class="btn btn-primary" type="submit">Start Quiz</button>
+      <a class="btn btn-link text-light" href="{{ url_for('home') }}">Back</a>
     </form>
   </div>
 </div>
 """
 
-# ---------- Quiz (question-only UI; 60s per question; STRICT MODE) ----------
+# ======= QUIZ (60s/question; strict) — NOTE: we DO NOT expose correct indices in DOM =========
 QUIZ_HTML = """
 <form id="jeeForm" method="post" action="{{ url_for('submit_quiz') }}" class="simple-quiz" autocomplete="off">
   <input type="hidden" name="forfeit" id="forfeitField" value="">
@@ -307,12 +366,12 @@ QUIZ_HTML = """
     <div class="qwrap" id="qwrap_{{ loop.index0 }}" data-qindex="{{ loop.index0 }}" style="display:none">
       <div class="qtext">Q{{ loop.index }}. {{ q.question }}</div>
       {% for opt in q.shuffled_options %}
-        <label class="option-row" for="{{ q.id }}_{{ loop.index0 }}">
-          <input class="ans-radio" type="radio" name="ans_{{ q.id }}" id="{{ q.id }}_{{ loop.index0 }}" value="{{ loop.index0 }}">
-          <div class="opt-text">{{ opt }}</div>
+        <label class="mcq-option" for="{{ q.id }}_{{ loop.index0 }}">
+          <input type="radio" name="ans_{{ q.id }}" id="{{ q.id }}_{{ loop.index0 }}" value="{{ loop.index0 }}">
+          <span class="mcq-badge">{{ 'ABCD'[loop.index0] }}</span>
+          <span class="mcq-text">{{ opt }}</span>
         </label>
       {% endfor %}
-      <input type="hidden" name="meta_{{ q.id }}" value="{{ q.correct_index_after_shuffle }}">
     </div>
   {% endfor %}
 
@@ -323,7 +382,7 @@ QUIZ_HTML = """
 
 <script>
 (function(){
-  // ---------- Fullscreen on load + first gesture ----------
+  // Fullscreen
   async function enterFullscreen(){
     try{
       if(document.fullscreenElement) return;
@@ -337,16 +396,13 @@ QUIZ_HTML = """
   const armFS = ()=>{ enterFullscreen(); document.removeEventListener('click', armFS); document.removeEventListener('keydown', armFS); };
   document.addEventListener('click', armFS); document.addEventListener('keydown', armFS);
 
-  // ---------- Strict anti-switch / anti-exit-FS ----------
+  // Strict anti-switch
   const form = document.getElementById('jeeForm');
   const forfeitField = document.getElementById('forfeitField');
   function forfeit(reason){ try{ forfeitField.value = reason || 'violation'; }catch(e){} try{ form.submit(); }catch(e){} }
-
-  document.addEventListener('visibilitychange', function(){ if(document.hidden){ forfeit('tab_switch'); } });
-  window.addEventListener('blur', function(){ setTimeout(function(){ if(!document.hasFocus()){ forfeit('window_blur'); } }, 100); });
-  document.addEventListener('fullscreenchange', function(){ if(!document.fullscreenElement){ forfeit('exit_fullscreen'); } });
-
-  // discourage copy/etc
+  document.addEventListener('visibilitychange', ()=>{ if(document.hidden){ forfeit('tab_switch'); } });
+  window.addEventListener('blur', ()=>{ setTimeout(()=>{ if(!document.hasFocus()){ forfeit('window_blur'); } }, 100); });
+  document.addEventListener('fullscreenchange', ()=>{ if(!document.fullscreenElement){ forfeit('exit_fullscreen'); } });
   document.addEventListener('contextmenu', e => e.preventDefault());
   ['copy','cut','paste'].forEach(evt => document.addEventListener(evt, e=>e.preventDefault()));
   document.addEventListener('keydown', function(e){
@@ -356,7 +412,7 @@ QUIZ_HTML = """
     }
   }, true);
 
-  // ---------- Per-question 60s timer ----------
+  // Per-question timer
   const PER_Q_SECONDS = 60;
   let current = 0;
   const wraps = Array.from(document.querySelectorAll('.qwrap'));
@@ -395,21 +451,11 @@ QUIZ_HTML = """
   }
   btnNext.addEventListener('click', nextQuestion);
 
-  document.querySelectorAll('.qwrap').forEach((wrap)=>{
-    wrap.querySelectorAll('.ans-radio').forEach((radio)=>{
-      radio.addEventListener('change', ()=>{
-        wrap.querySelectorAll('.option-row').forEach(r => r.style.textDecoration = "none");
-        radio.closest('.option-row').style.textDecoration = "underline";
-      });
-    });
-  });
-
   if(totalQ){ show(0); }
 })();
 </script>
 """
 
-# ---------- Thank-you slide (no score) ----------
 THANK_YOU_HTML = """
 <div class="d-flex align-items-center justify-content-center" style="min-height:50vh;">
   <div class="text-center">
@@ -418,9 +464,7 @@ THANK_YOU_HTML = """
     <p class="mt-3"><em>Redirecting to the start page in 5 seconds…</em></p>
   </div>
 </div>
-<script>
-  setTimeout(function(){ window.location.href = "{{ url_for('home') }}"; }, 5000);
-</script>
+<script> setTimeout(()=>{ window.location.href = "{{ url_for('home') }}"; }, 5000); </script>
 """
 
 # ---------------------- Excel helpers ----------------------
@@ -444,23 +488,22 @@ def read_sheet(sheet: str) -> pd.DataFrame:
 
 def write_sheet(sheet: str, df: pd.DataFrame):
     _ensure_workbook()
-    all_students = read_sheet(STUDENTS_SHEET)
-    all_attempts = read_sheet(ATTEMPTS_SHEET)
-    if sheet == STUDENTS_SHEET:
-        all_students = df
-    elif sheet == ATTEMPTS_SHEET:
-        all_attempts = df
-    with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
-        all_students.to_excel(writer, sheet_name=STUDENTS_SHEET, index=False)
-        all_attempts.to_excel(writer, sheet_name=ATTEMPTS_SHEET, index=False)
+    with XL_LOCK:
+        all_students = read_sheet(STUDENTS_SHEET)
+        all_attempts = read_sheet(ATTEMPTS_SHEET)
+        if sheet == STUDENTS_SHEET:
+            all_students = df
+        elif sheet == ATTEMPTS_SHEET:
+            all_attempts = df
+        with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
+            all_students.to_excel(writer, sheet_name=STUDENTS_SHEET, index=False)
+            all_attempts.to_excel(writer, sheet_name=ATTEMPTS_SHEET, index=False)
 
 def has_attempted(roll: str) -> bool:
     df = read_sheet(STUDENTS_SHEET)
-    if df.empty:
-        return False
+    if df.empty: return False
     match = df[df["rollnumber"].astype(str).str.lower() == roll.lower()]
-    if match.empty:
-        return False
+    if match.empty: return False
     attempted = match.iloc[-1].get("attempted", 0)
     return bool(int(attempted)) if pd.notna(attempted) else False
 
@@ -519,28 +562,42 @@ def pick_random_mix() -> List[Dict[str, Any]]:
         correct_after = idxs.index(q["answer_index"])
         prepped.append({
             "id": q["id"], "section": q["section"], "question": q["question"],
-            "options": q["options"],  # original (stored)
+            "options": q["options"],
             "shuffled_options": shuffled,
             "correct_index_after_shuffle": correct_after
         })
-    return prepped  # keep grouped order; shuffle here if you want mixed sections
+    return prepped
+
+# ---------------------- Admin auth helper ----------------------
+def require_admin(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not session.get("is_admin"):
+            flash("Please log in as admin first.")
+            return redirect(url_for("admin_login"))
+        return view(*args, **kwargs)
+    return wrapper
 
 # ---------------------- Routes ----------------------
 @app.route("/")
 def home():
+    body = render_template_string(LANDING_HTML)
+    return render_template_string(BASE_HTML, title="Welcome", header="Choose Portal", body=body, photo_bg=PHOTO_BG, show_timer=False)
+
+@app.route("/student")
+def student_entry():
     body = render_template_string(FORM_HTML)
-    return render_template_string(BASE_HTML, title="Login", header="Enter Your Details", body=body, photo_bg=PHOTO_BG, show_timer=False)
+    return render_template_string(BASE_HTML, title="Student", header="Enter Your Details", body=body, photo_bg=PHOTO_BG, show_timer=False)
 
 @app.route("/start", methods=["POST"])
 def start_quiz():
     roll = request.form.get("roll","").strip()
     name = request.form.get("name","").strip()
     if not roll or not name:
-        flash("Please fill both Roll and Name."); return redirect(url_for("home"))
-
+        flash("Please fill both Roll and Name."); return redirect(url_for("student_entry"))
     if has_attempted(roll):
         flash("You have already attempted the quiz. Only one attempt is allowed per roll number.")
-        return redirect(url_for("home"))
+        return redirect(url_for("student_entry"))
 
     save_student_start(roll, name, 2)
     session["student"] = {"roll": roll, "name": name, "year": 2}
@@ -555,7 +612,7 @@ def submit_quiz():
     student = session.get("student")
     questions = session.get("quiz", [])
     if not student or not questions:
-        flash("Session expired or quiz not started."); return redirect(url_for("home"))
+        flash("Session expired or quiz not started."); return redirect(url_for("student_entry"))
     session["quiz"] = []  # prevent re-submit
 
     forfeit_reason = request.form.get("forfeit") or ""
@@ -563,7 +620,6 @@ def submit_quiz():
     review = []
 
     if forfeit_reason:
-        # forced 0 score if exam violated
         for q in questions:
             review.append({
                 "id": q["id"], "section": q["section"], "question": q["question"],
@@ -597,26 +653,118 @@ def submit_quiz():
     body = render_template_string(THANK_YOU_HTML, quote=quote)
     return render_template_string(BASE_HTML, title="Done", header="Submission Received", body=body, photo_bg=PHOTO_BG, show_timer=False)
 
-# Optional: admin (JSON dump)
+# ---------------------- Admin: login/logout/dashboard ----------------------
+@app.route("/admin-login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        user = request.form.get("username", "").strip()
+        pw   = request.form.get("password", "").strip()
+        if user == ADMIN_USER and pw == ADMIN_PASS:
+            session["is_admin"] = True
+            flash("Logged in as admin.")
+            return redirect(url_for("admin_home"))
+        flash("Invalid credentials.")
+    login_form = """
+    <div class="row justify-content-center">
+      <div class="col-md-6 col-lg-5">
+        <div class="card" style="background:rgba(11,19,40,.40); border:1px solid rgba(147,197,253,.35);">
+          <div class="card-body">
+            <h5 class="card-title text-white mb-3">Admin Login</h5>
+            <form method="post" action="{{ url_for('admin_login') }}">
+              <div class="mb-3">
+                <label class="form-label">Username</label>
+                <input type="text" name="username" class="form-control" required autofocus>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Password</label>
+                <input type="password" name="password" class="form-control" required>
+              </div>
+              <button class="btn btn-primary" type="submit">Login</button>
+              <a class="btn btn-link text-light" href="{{ url_for('home') }}">Back</a>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+    return render_template_string(BASE_HTML, title="Admin Login", header="Admin — Login", body=render_template_string(login_form), photo_bg=PHOTO_BG, show_timer=False)
+
+@app.route("/admin-logout")
+@require_admin
+def admin_logout():
+    session.pop("is_admin", None)
+    flash("Logged out.")
+    return redirect(url_for("home"))
+
 @app.route("/admin")
+@require_admin
 def admin_home():
-    key = request.args.get("key","")
-    if key != ADMIN_KEY: return "Forbidden: invalid key", 403
-    students = read_sheet(STUDENTS_SHEET); attempts = read_sheet(ATTEMPTS_SHEET)
+    students = read_sheet(STUDENTS_SHEET)
     rows = []
     if not students.empty:
         students = students.fillna("")
         for _, s in students[::-1].iterrows():
-            roll = str(s.get("rollnumber",""))
-            att_ids = attempts[attempts["rollnumber"].astype(str) == roll]["attempt_id"].unique().tolist() if not attempts.empty else []
+            score = s.get("score","")
+            total = s.get("total","")
+            pct = ""
+            try:
+                if str(score) != "" and str(total) != "" and int(total) > 0:
+                    pct = f"{(int(score)/int(total))*100:.1f}%"
+            except Exception:
+                pct = ""
             rows.append({
-                "timestamp": s.get("timestamp",""), "rollnumber": roll, "name": s.get("name",""),
-                "year": s.get("year",""), "score": s.get("score",""), "total": s.get("total",""),
-                "attempted": s.get("attempted",""), "forfeit_reason": s.get("forfeit_reason",""),
-                "attempt_ids": att_ids
+                "timestamp": s.get("timestamp",""),
+                "rollnumber": str(s.get("rollnumber","")),
+                "name": s.get("name",""),
+                "year": s.get("year",""),
+                "score": score, "total": total, "percent": pct,
+                "attempted": s.get("attempted",""),
+                "forfeit_reason": s.get("forfeit_reason",""),
             })
-    table = "<pre style='white-space:pre-wrap'>{}</pre>".format(json.dumps(rows, indent=2))
-    return render_template_string(BASE_HTML, title="Admin", header="Owner Dashboard", body=table, photo_bg=PHOTO_BG, show_timer=False)
 
+    table_html = """
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <div><a class="btn btn-outline-light btn-sm" href="{{ url_for('download_excel') }}">Download Excel</a></div>
+      <div><a class="btn btn-outline-danger btn-sm" href="{{ url_for('admin_logout') }}">Logout</a></div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-dark table-striped table-hover align-middle">
+        <thead>
+          <tr>
+            <th>Timestamp</th><th>Roll</th><th>Name</th><th>Year</th>
+            <th>Score</th><th>Total</th><th>%</th><th>Attempted</th><th>Forfeit</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+          <tr>
+            <td>{{ r.timestamp }}</td>
+            <td>{{ r.rollnumber }}</td>
+            <td>{{ r.name }}</td>
+            <td>{{ r.year }}</td>
+            <td>{{ r.score }}</td>
+            <td>{{ r.total }}</td>
+            <td>{{ r.percent }}</td>
+            <td>{{ r.attempted }}</td>
+            <td>{{ r.forfeit_reason }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    """
+    body = render_template_string(table_html, rows=rows)
+    return render_template_string(BASE_HTML, title="Admin", header="Owner Dashboard", body=body, photo_bg=PHOTO_BG, show_timer=False)
+
+@app.route("/download-excel")
+@require_admin
+def download_excel():
+    if not os.path.exists(EXCEL_PATH):
+        flash("No Excel file found yet.")
+        return redirect(url_for("admin_home"))
+    return send_file(EXCEL_PATH, as_attachment=True, download_name="students_results.xlsx")
+
+# ===================== run =====================
 if __name__ == "__main__":
     app.run(debug=True)
