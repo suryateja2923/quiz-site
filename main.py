@@ -1,26 +1,41 @@
-# main.py — 2nd Year Quiz (Apt 8 + Reason 7 + Coding 15 • 60s/Question • Strict Mode)
+# main.py — Quiz (Apt 8 + Reason 7 + Coding 15 • 60s/Question • Strict Mode)
 # ------------------------------------------------------------------------------------
 # Run locally:
-#   pip install -r requirements.txt
+#   pip install Flask pandas openpyxl portalocker
 #   python main.py
 #   open http://127.0.0.1:5000
 
 from __future__ import annotations
-import os, json, random
+import os, json, random, secrets
 from datetime import datetime
 from typing import List, Dict, Any
+
 from flask import (
     Flask, request, redirect, url_for, session,
     render_template_string, flash, send_file
 )
 import pandas as pd
+import portalocker  # for safe Excel writes
+
+# ===================== EDIT THESE (no .env) =====================
+QUIZ_SECRET    = "change-this-to-a-long-random-secret-64chars-min"
+ADMIN_USERNAME = "surya"
+ADMIN_PASSWORD = "nriit123"      # <— your password (plain, by request)
+
+STRICT_MODE    = True            # anti-cheat (strike-based)
+PER_Q_SECONDS  = 60              # seconds per question
+DEV_HTTP       = True            # True for local http; set False when on HTTPS
+# ===============================================================
 
 app = Flask(__name__, static_folder="static")
-app.secret_key = os.environ.get("QUIZ_SECRET", "dev-secret-change-me")
-
-# ---- Admin creds (as you requested) ----
-ADMIN_USERNAME = "surya"
-ADMIN_PASSWORD = "nriit123"
+if len(QUIZ_SECRET) < 32 or "change-this" in QUIZ_SECRET:
+    print("[WARN] Please set a strong QUIZ_SECRET in main.py (32+ random chars).")
+app.secret_key = QUIZ_SECRET
+app.config.update(
+    SESSION_COOKIE_SECURE=False if DEV_HTTP else True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 # ---- Images (use URLs only; no file paths) ----
 LOGO_URL  = "https://geographical-purple-mn4kynlr5k.edgeone.app/logo.jpg"
@@ -35,7 +50,6 @@ ATTEMPTS_SHEET = "attempts"
 # =============================================================================
 # 2ND-YEAR QUESTION BANKS (Aptitude, Reasoning, Basic Coding)
 # Each item: {"id", "section", "question", "options":[...], "answer_index": int}
-# (same data you provided)
 # =============================================================================
 
 APTITUDE: List[Dict[str, Any]] = [
@@ -210,6 +224,21 @@ CODING: List[Dict[str, Any]] = [
 # selection quotas
 QUOTA = {"Aptitude": 8, "Reasoning": 7, "Coding": 15}
 
+# ---------------------- CSRF (lightweight) ----------------------
+@app.before_request
+def _csrf_protect():
+    if request.method == "POST":
+        token = session.get("_csrf_token")
+        if not token or token != request.form.get("_csrf_token"):
+            return "CSRF validation failed", 400
+
+def generate_csrf_token():
+    if "_csrf_token" not in session:
+        session["_csrf_token"] = secrets.token_urlsafe(32)
+    return session["_csrf_token"]
+
+app.jinja_env.globals["csrf_token"] = generate_csrf_token
+
 # ---------------------- Templates ----------------------
 BASE_HTML = """
 <!doctype html>
@@ -228,7 +257,6 @@ BASE_HTML = """
       input{background:rgba(3,7,18,.35);color:#fff;border:1px solid rgba(147,197,253,.45);backdrop-filter:blur(6px);min-height:44px}
       input:focus{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(96,165,250,.35);outline:none}
 
-      /* Option blocks look/selection */
       .simple-quiz .qtext{color:#fff;font-weight:800;text-shadow:0 0 8px rgba(255,255,255,.45);margin:.35rem 0 1rem 0;font-size:clamp(1.1rem,1.2rem + .6vw,1.7rem)}
       .simple-quiz .option-row{background:rgba(255,255,255,0.02);border:1px solid rgba(209,213,219,.55);border-radius:12px;padding:.85rem 1rem;margin-bottom:.75rem;color:#f8fafc;display:flex;align-items:center;gap:.75rem;line-height:1.35;transition:box-shadow .15s,border-color .15s,background .15s}
       .simple-quiz .option-row:hover{box-shadow:0 0 0 3px rgba(147,197,253,.25) inset;border-color:rgba(147,197,253,.75)}
@@ -240,7 +268,6 @@ BASE_HTML = """
 
       #timer{background:rgba(11,19,40,.40);border:1px solid rgba(147,197,253,.55);color:#eaf2ff;font-weight:bold;padding:.3em .7em;border-radius:.5rem;box-shadow:0 0 10px rgba(147,197,253,.45);text-shadow:0 0 8px rgba(255,255,255,.6)}
 
-      /* Floating logo uses URL (no file path) */
       .floating-logo{position:fixed;right:20px;bottom:20px;width:86px;height:86px;border-radius:50%;display:grid;place-items:center;z-index:999;background:transparent;box-shadow:0 0 24px rgba(37,99,235,.55),0 0 48px rgba(37,99,235,.35),0 0 84px rgba(37,99,235,.25);animation:pulse 3.2s ease-in-out infinite}
       .floating-logo img{width:78px;height:78px;border-radius:50%;object-fit:contain;border:none;box-shadow:none}
       @keyframes pulse{0%,100%{box-shadow:0 0 24px rgba(37,99,235,.55),0 0 48px rgba(37,99,235,.35),0 0 84px rgba(37,99,235,.25)}50%{box-shadow:0 0 38px rgba(37,99,235,.65),0 0 64px rgba(37,99,235,.42),0 0 110px rgba(37,99,235,.30)}}
@@ -288,6 +315,7 @@ FORM_HTML = """
 <div class="row">
   <div class="col-lg-7">
     <form class="p-0" method="post" action="{{ url_for('start_quiz') }}">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
       <div class="mb-3">
         <label class="form-label">Roll Number</label>
         <input required type="text" name="roll" class="form-control" />
@@ -306,6 +334,7 @@ FORM_HTML = """
 # ---------- Admin login ----------
 ADMIN_LOGIN_HTML = """
 <form method="post" class="row gy-3" style="max-width:480px">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <div class="col-12">
     <label class="form-label">Admin Name</label>
     <input required type="text" name="username" class="form-control">
@@ -321,17 +350,21 @@ ADMIN_LOGIN_HTML = """
 </form>
 """
 
-# ---------- Admin dashboard ----------
+# ---------- Admin dashboard with Delete ----------
 ADMIN_DASH_HTML = """
-<div class="mb-3 d-flex gap-2">
+<div class="mb-3 d-flex gap-2 align-items-center">
   <a class="btn btn-secondary" href="{{ url_for('download_excel') }}">Download Excel</a>
-  <a class="btn btn-outline-light" href="{{ url_for('logout_admin') }}">Logout</a>
+  <form method="post" action="{{ url_for('logout_admin') }}" class="m-0">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <button class="btn btn-outline-light" type="submit">Logout</button>
+  </form>
 </div>
+
 <div class="table-responsive">
   <table class="table table-dark table-striped align-middle">
     <thead><tr>
       <th>Timestamp</th><th>Roll</th><th>Name</th><th>Year</th>
-      <th>Score</th><th>Total</th><th>Attempted</th><th>Forfeit</th><th>Attempt IDs</th>
+      <th>Score</th><th>Total</th><th>Attempted</th><th>Forfeit</th><th>Attempt IDs</th><th>Actions</th>
     </tr></thead>
     <tbody>
       {% for r in rows %}
@@ -345,6 +378,13 @@ ADMIN_DASH_HTML = """
           <td>{{ r.attempted }}</td>
           <td>{{ r.forfeit_reason }}</td>
           <td>{{ r.attempt_ids|join(', ') }}</td>
+          <td>
+            <form method="post" action="{{ url_for('admin_delete_student') }}" onsubmit="return confirm('Delete all records for roll {{ r.rollnumber }}? This cannot be undone.');">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="roll" value="{{ r.rollnumber }}">
+              <button class="btn btn-sm btn-danger" type="submit">Delete</button>
+            </form>
+          </td>
         </tr>
       {% endfor %}
     </tbody>
@@ -352,9 +392,10 @@ ADMIN_DASH_HTML = """
 </div>
 """
 
-# ---------- Quiz (60s per question; strict mode) ----------
+# ---------- Quiz (per-question seconds; strict mode with strikes) ----------
 QUIZ_HTML = """
 <form id="jeeForm" method="post" action="{{ url_for('submit_quiz') }}" class="simple-quiz" autocomplete="off">
+  <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="forfeit" id="forfeitField" value="">
   <div class="d-flex justify-content-end mb-2">
     <div id="timer">Time Left: <span id="mm">01</span>:<span id="ss">00</span></div>
@@ -380,6 +421,9 @@ QUIZ_HTML = """
 
 <script>
 (function(){
+  const STRICT_MODE = {{ 'true' if strict_mode else 'false' }};
+  const PER_Q_SECONDS = {{ per_q_seconds|int }};
+
   async function enterFullscreen(){
     try{
       if(document.fullscreenElement) return;
@@ -397,21 +441,35 @@ QUIZ_HTML = """
   const forfeitField = document.getElementById('forfeitField');
   function forfeit(reason){ try{ forfeitField.value = reason || 'violation'; }catch(e){} try{ form.submit(); }catch(e){} }
 
-  document.addEventListener('visibilitychange', function(){ if(document.hidden){ forfeit('tab_switch'); } });
-  window.addEventListener('blur', function(){ setTimeout(function(){ if(!document.hasFocus()){ forfeit('window_blur'); } }, 100); });
-  document.addEventListener('fullscreenchange', function(){ if(!document.fullscreenElement){ forfeit('exit_fullscreen'); } });
-
-  document.addEventListener('contextmenu', e => e.preventDefault());
-  ['copy','cut','paste'].forEach(evt => document.addEventListener(evt, e=>e.preventDefault()));
-  document.addEventListener('keydown', function(e){
-    const k = e.key.toLowerCase();
-    if ((e.ctrlKey && ['p','s','c','x','a','u','l'].includes(k)) || e.key === 'F11' || e.key === 'Escape'){
-      e.preventDefault(); e.stopPropagation();
+  // --- strict mode with strikes to reduce false positives ---
+  let strikes = 0;
+  function maybeForfeit(reason){
+    if(!STRICT_MODE) return;
+    strikes++;
+    if (strikes === 1) {
+      try{ alert("Focus violation detected. One more will forfeit your attempt."); }catch(e){}
+      return;
     }
-  }, true);
+    forfeit(reason);
+  }
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden){
+      setTimeout(function(){
+        if(document.hidden){ maybeForfeit('tab_switch'); }
+      }, 1500);
+    }
+  });
+  window.addEventListener('blur', function(){
+    setTimeout(function(){
+      if(!document.hasFocus()){ maybeForfeit('window_blur'); }
+    }, 1500);
+  });
+  document.addEventListener('fullscreenchange', function(){
+    if(!document.fullscreenElement){ maybeForfeit('exit_fullscreen'); }
+  });
 
-  const PER_Q_SECONDS = 60;
-  let current = 0;
+  document.addEventListener('contextmenu', e => { if(STRICT_MODE) e.preventDefault(); });
+
   const wraps = Array.from(document.querySelectorAll('.qwrap'));
   const totalQ = wraps.length;
   const btnNext = document.getElementById('btnNext');
@@ -422,6 +480,7 @@ QUIZ_HTML = """
   const ssTop = document.getElementById('ssTop');
   let left = PER_Q_SECONDS;
   let tHandle = null;
+  let current = 0;
 
   function updateTimer(){
     const m = Math.floor(left/60), s = left%60;
@@ -471,12 +530,14 @@ THANK_YOU_HTML = """
     <p class="mt-3"><em>Redirecting to the start page in 5 seconds…</em></p>
   </div>
 </div>
-<script>
-  setTimeout(function(){ window.location.href = "{{ url_for('home') }}"; }, 5000);
-</script>
+<script> setTimeout(function(){ window.location.href = "{{ url_for('home') }}"; }, 5000); </script>
 """
 
-# ---------------------- Excel helpers ----------------------
+# ---------------------- Excel helpers (Windows-safe locking) ----------------------
+def _excel_safe(s: str) -> str:
+    s = str(s or "").strip()
+    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
+
 def _ensure_workbook():
     if not os.path.exists(EXCEL_PATH):
         with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
@@ -488,47 +549,88 @@ def _ensure_workbook():
                 "options_json","correct_idx","user_choice","is_correct"
             ]).to_excel(writer, sheet_name=ATTEMPTS_SHEET, index=False)
 
-def read_sheet(sheet: str) -> pd.DataFrame:
-    _ensure_workbook()
+def _lock_ctx():
+    # single lock file; do NOT try to re-enter this within the same call chain
+    return portalocker.Lock(EXCEL_PATH + ".lock", timeout=10)
+
+def _read_sheet_unlocked(sheet: str) -> pd.DataFrame:
+    """Read a sheet WITHOUT taking the lock. Use only when you already hold the lock."""
     try:
         return pd.read_excel(EXCEL_PATH, sheet_name=sheet)
     except Exception:
         return pd.DataFrame()
 
-def write_sheet(sheet: str, df: pd.DataFrame):
+def read_sheet(sheet: str) -> pd.DataFrame:
+    """Public reader that takes the lock (safe to call from routes)."""
     _ensure_workbook()
-    all_students = read_sheet(STUDENTS_SHEET)
-    all_attempts = read_sheet(ATTEMPTS_SHEET)
-    if sheet == STUDENTS_SHEET:
-        all_students = df
-    elif sheet == ATTEMPTS_SHEET:
-        all_attempts = df
-    with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
-        all_students.to_excel(writer, sheet_name=STUDENTS_SHEET, index=False)
-        all_attempts.to_excel(writer, sheet_name=ATTEMPTS_SHEET, index=False)
+    with _lock_ctx():
+        return _read_sheet_unlocked(sheet)
+
+def write_both_sheets(df_students: pd.DataFrame, df_attempts: pd.DataFrame):
+    """Public writer that takes the lock and writes both sheets."""
+    _ensure_workbook()
+    with _lock_ctx():
+        with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
+            df_students.to_excel(writer, sheet_name=STUDENTS_SHEET, index=False)
+            df_attempts.to_excel(writer, sheet_name=ATTEMPTS_SHEET, index=False)
+
+def write_sheet(sheet: str, df: pd.DataFrame):
+    """
+    Update exactly one sheet while keeping the other as-is.
+    IMPORTANT: Acquire the lock ONCE here, and avoid calling read_sheet() (which locks again).
+    """
+    _ensure_workbook()
+    with _lock_ctx():
+        # read the current state WITHOUT locking (we already hold it)
+        all_students = _read_sheet_unlocked(STUDENTS_SHEET)
+        all_attempts = _read_sheet_unlocked(ATTEMPTS_SHEET)
+
+        if sheet == STUDENTS_SHEET:
+            all_students = df
+        elif sheet == ATTEMPTS_SHEET:
+            all_attempts = df
+        else:
+            return
+
+        # write both sheets directly (no nested lock)
+        with pd.ExcelWriter(EXCEL_PATH, engine="openpyxl") as writer:
+            all_students.to_excel(writer, sheet_name=STUDENTS_SHEET, index=False)
+            all_attempts.to_excel(writer, sheet_name=ATTEMPTS_SHEET, index=False)
 
 def has_attempted(roll: str) -> bool:
+    """One attempt policy:
+       - any row attempted=1 => True
+       - or any start within last 30 minutes => active => True
+    """
     df = read_sheet(STUDENTS_SHEET)
-    if df.empty:
+    if df.empty: return False
+    roll_l = str(roll).lower()
+    rows = df[df["rollnumber"].astype(str).str.lower() == roll_l]
+    if rows.empty: return False
+    if (rows["attempted"].fillna(0).astype(int) == 1).any(): return True
+    try:
+        rows_ts = pd.to_datetime(rows["timestamp"], errors="coerce", utc=True)
+    except Exception:
         return False
-    match = df[df["rollnumber"].astype(str).str.lower() == roll.lower()]
-    if match.empty:
-        return False
-    attempted = match.iloc[-1].get("attempted", 0)
-    return bool(int(attempted)) if pd.notna(attempted) else False
+    cutoff = pd.Timestamp.utcnow() - pd.Timedelta(minutes=30)
+    return (rows_ts > cutoff).any()
 
 def save_student_start(roll: str, name: str, year: int = 2) -> None:
     students = read_sheet(STUDENTS_SHEET)
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    new_row = {"timestamp": ts, "rollnumber": roll.strip(), "name": name.strip(), "year": int(year),
-               "score": None, "total": None, "attempted": 0, "attempt_ids": None, "forfeit_reason": None}
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    new_row = {"timestamp": ts,
+               "rollnumber": _excel_safe(roll.strip()),
+               "name": _excel_safe(name.strip()),
+               "year": int(year),
+               "score": None, "total": None, "attempted": 0,
+               "attempt_ids": None, "forfeit_reason": None}
     students = pd.concat([students, pd.DataFrame([new_row])], ignore_index=True)
     write_sheet(STUDENTS_SHEET, students)
 
 def finalize_student_attempt(roll: str, score: int, total: int, attempt_id: str, forfeit_reason: str | None):
     students = read_sheet(STUDENTS_SHEET)
     if students.empty: return
-    mask = students["rollnumber"].astype(str).str.lower() == roll.lower()
+    mask = students["rollnumber"].astype(str).str.lower() == str(roll).lower()
     idxs = students[mask].index.tolist()
     if not idxs: return
     last_idx = idxs[-1]
@@ -545,9 +647,10 @@ def finalize_student_attempt(roll: str, score: int, total: int, attempt_id: str,
 def record_attempt_rows(attempt_id: str, roll: str, name: str, year: int, review_rows: List[Dict[str, Any]]):
     attempts = read_sheet(ATTEMPTS_SHEET)
     rows = []
+    safe_roll = _excel_safe(roll); safe_name = _excel_safe(name)
     for i, r in enumerate(review_rows, start=1):
         rows.append({
-            "attempt_id": attempt_id, "rollnumber": roll, "name": name, "year": year,
+            "attempt_id": attempt_id, "rollnumber": safe_roll, "name": safe_name, "year": year,
             "q_no": i, "q_id": r["id"], "section": r["section"], "question": r["question"],
             "options_json": json.dumps(r["options"], ensure_ascii=False),
             "correct_idx": r["correct_idx"], "user_choice": r["user_choice"],
@@ -555,6 +658,19 @@ def record_attempt_rows(attempt_id: str, roll: str, name: str, year: int, review
         })
     attempts = pd.concat([attempts, pd.DataFrame(rows)], ignore_index=True)
     write_sheet(ATTEMPTS_SHEET, attempts)
+
+def delete_student_everywhere(roll: str) -> int:
+    """Delete all rows for given roll (case-insensitive) from both sheets."""
+    roll_l = str(roll).lower()
+    students = read_sheet(STUDENTS_SHEET)
+    attempts = read_sheet(ATTEMPTS_SHEET)
+    before_s = len(students); before_a = len(attempts)
+    if not students.empty:
+        students = students[students["rollnumber"].astype(str).str.lower() != roll_l]
+    if not attempts.empty:
+        attempts = attempts[attempts["rollnumber"].astype(str).str.lower() != roll_l]
+    write_both_sheets(students, attempts)
+    return (before_s - len(students)) + (before_a - len(attempts))
 
 # ---------------------- Selection helper ----------------------
 def pick_random_mix() -> List[Dict[str, Any]]:
@@ -572,7 +688,7 @@ def pick_random_mix() -> List[Dict[str, Any]]:
         correct_after = idxs.index(q["answer_index"])
         prepped.append({
             "id": q["id"], "section": q["section"], "question": q["question"],
-            "options": q["options"],  # original (stored)
+            "options": shuffled,  # store the displayed (shuffled) options
             "shuffled_options": shuffled,
             "correct_index_after_shuffle": correct_after
         })
@@ -596,7 +712,7 @@ def start_quiz():
     if not roll or not name:
         flash("Please fill both Roll and Name."); return redirect(url_for("student_entry"))
     if has_attempted(roll):
-        flash("You have already attempted the quiz. Only one attempt is allowed per roll number.")
+        flash("You have already attempted or have an active session. Only one attempt is allowed per roll number.")
         return redirect(url_for("student_entry"))
 
     save_student_start(roll, name, 2)
@@ -604,7 +720,13 @@ def start_quiz():
 
     questions = pick_random_mix()
     session["quiz"] = questions
-    body = render_template_string(QUIZ_HTML, student=session["student"], questions=questions)
+    body = render_template_string(
+        QUIZ_HTML,
+        student=session["student"],
+        questions=questions,
+        per_q_seconds=PER_Q_SECONDS,
+        strict_mode=STRICT_MODE
+    )
     return render_template_string(BASE_HTML, title="Quiz", header="Answer the Questions", body=body, photo_bg=PHOTO_BG, logo_url=LOGO_URL, show_timer=True)
 
 @app.route("/submit", methods=["POST"])
@@ -640,7 +762,7 @@ def submit_quiz():
             })
 
     total = len(questions)
-    attempt_id = f"{student['roll']}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    attempt_id = f"{student['roll']}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     record_attempt_rows(attempt_id, student["roll"], student["name"], 2, review)
     finalize_student_attempt(student["roll"], 0 if forfeit_reason else score, total, attempt_id, forfeit_reason or None)
 
@@ -669,7 +791,7 @@ def admin_login():
     body = render_template_string(ADMIN_LOGIN_HTML)
     return render_template_string(BASE_HTML, title="Admin Login", header="Admin Login", body=body, photo_bg=PHOTO_BG, logo_url=LOGO_URL, show_timer=False)
 
-@app.route("/admin")
+@app.route("/admin", methods=["GET"])
 def admin_home():
     if not _require_admin():
         return redirect(url_for("admin_login"))
@@ -679,7 +801,9 @@ def admin_home():
         students = students.fillna("")
         for _, s in students[::-1].iterrows():
             roll = str(s.get("rollnumber",""))
-            att_ids = attempts[attempts["rollnumber"].astype(str) == roll]["attempt_id"].unique().tolist() if not attempts.empty else []
+            att_ids = []
+            if not attempts.empty:
+                att_ids = attempts[attempts["rollnumber"].astype(str).str.lower() == roll.lower()]["attempt_id"].dropna().unique().tolist()
             rows.append({
                 "timestamp": s.get("timestamp",""), "rollnumber": roll, "name": s.get("name",""),
                 "year": s.get("year",""), "score": s.get("score",""), "total": s.get("total",""),
@@ -689,7 +813,19 @@ def admin_home():
     body = render_template_string(ADMIN_DASH_HTML, rows=rows)
     return render_template_string(BASE_HTML, title="Admin", header="Owner Dashboard", body=body, photo_bg=PHOTO_BG, logo_url=LOGO_URL, show_timer=False)
 
-@app.route("/admin/logout")
+@app.route("/admin/delete-student", methods=["POST"])
+def admin_delete_student():
+    if not _require_admin():
+        return redirect(url_for("admin_login"))
+    roll = request.form.get("roll","").strip()
+    if not roll:
+        flash("No roll specified for deletion.")
+        return redirect(url_for("admin_home"))
+    deleted = delete_student_everywhere(roll)
+    flash(f"Deleted {deleted} rows for roll {roll}.")
+    return redirect(url_for("admin_home"))
+
+@app.route("/admin/logout", methods=["POST"])
 def logout_admin():
     session.pop("is_admin", None)
     flash("Logged out.")
@@ -700,17 +836,20 @@ def download_excel():
     if not _require_admin():
         return redirect(url_for("admin_login"))
     _ensure_workbook()
-    return send_file(EXCEL_PATH, as_attachment=True, download_name="students.xlsx")
+    stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    return send_file(EXCEL_PATH, as_attachment=True, download_name=f"students_{stamp}.xlsx")
 
-# handy aliases
+# alias
 app.add_url_rule("/download-excel", view_func=download_excel)
-app.add_url_rule("/logout", view_func=logout_admin)
 
 # ---------------------- Entry aliases ----------------------
 @app.route("/student-entry")
 def student_entry_alias():
     return redirect(url_for("student_entry"))
 
+@app.route("/healthz")
+def healthz():
+    return {"ok": True}, 200
+
 if __name__ == "__main__":
-    # For local debugging only. In Render we use gunicorn from requirements.txt
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=DEV_HTTP)
